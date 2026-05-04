@@ -10,6 +10,7 @@
 #include "GameFramework/DamageType.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/GameplayStatics.h"
+#include "Player/Character/GsPlayerResourceDataAsset.h"
 #include "Player/Skill/GsSkillBall.h"
 #include "TimerManager.h"
 
@@ -26,13 +27,14 @@ bool AGsPlayer::StartMeleeAttack()
 		return false;
 	}
 
-	float ActionDuration = MeleeFallbackDuration;
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
+	float ActionDuration = PlayerTuning.MeleeFallbackDuration;
 
-	if (MeleeAttackMontage && FirstPersonMesh)
+	if (FirstPersonMesh)
 	{
 		if (UAnimInstance* AnimInstance = FirstPersonMesh->GetAnimInstance())
 		{
-			const float MontageDuration = AnimInstance->Montage_Play(MeleeAttackMontage);
+			const float MontageDuration = AnimInstance->Montage_Play(PlayerResourceData->MeleeAttackMontage);
 			if (MontageDuration > 0.0f)
 			{
 				ActionDuration = MontageDuration;
@@ -53,13 +55,13 @@ bool AGsPlayer::StartMeleeAttack()
 
 	World->GetTimerManager().ClearTimer(MeleeHitTimer);
 
-	if (MeleeHitDelay <= 0.0f)
+	if (PlayerTuning.MeleeHitDelay <= 0.0f)
 	{
 		PerformMeleeHit();
 	}
 	else
 	{
-		World->GetTimerManager().SetTimer(MeleeHitTimer, this, &AGsPlayer::PerformMeleeHit, MeleeHitDelay, false);
+		World->GetTimerManager().SetTimer(MeleeHitTimer, this, &AGsPlayer::PerformMeleeHit, PlayerTuning.MeleeHitDelay, false);
 	}
 
 	return true;
@@ -67,7 +69,7 @@ bool AGsPlayer::StartMeleeAttack()
 
 FVector AGsPlayer::GetSkillAimTarget(const FVector& ViewLocation, const FVector& ViewDirection) const
 {
-	const FVector TraceEnd = ViewLocation + (ViewDirection * SkillAimTraceDistance);
+	const FVector TraceEnd = ViewLocation + (ViewDirection * GetPlayerTuning().SkillAimTraceDistance);
 
 	UWorld* World = GetWorld();
 	if (!World)
@@ -85,7 +87,7 @@ FVector AGsPlayer::GetSkillAimTarget(const FVector& ViewLocation, const FVector&
 
 bool AGsPlayer::StartSkillCast()
 {
-	if (bIsDead || !SkillProjectileClass)
+	if (bIsDead)
 	{
 		return false;
 	}
@@ -102,9 +104,9 @@ bool AGsPlayer::StartSkillCast()
 		return false;
 	}
 
-	const bool bIsSkillDuringSlide = IsSliding();
-	const bool bStartedSkillAction = !bIsSkillDuringSlide;
-	if (bStartedSkillAction && !TryStartCharacterAction(EUEGameJamPlayerAction::Skill, SkillActionDuration))
+	const bool bShouldBypassSkillAction = IsSliding() || IsWallRunning();
+	const bool bStartedSkillAction = !bShouldBypassSkillAction;
+	if (bStartedSkillAction && !TryStartCharacterAction(EUEGameJamPlayerAction::Skill, GetPlayerTuning().SkillActionDuration))
 	{
 		return false;
 	}
@@ -123,7 +125,7 @@ bool AGsPlayer::StartSkillCast()
 	SpawnParams.Instigator = this;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
-	AGsSkillBall* SpawnedSkillBall = World->SpawnActor<AGsSkillBall>(SkillProjectileClass, SpawnLocation, SpawnRotation, SpawnParams);
+	AGsSkillBall* SpawnedSkillBall = World->SpawnActor<AGsSkillBall>(PlayerResourceData->SkillProjectileClass, SpawnLocation, SpawnRotation, SpawnParams);
 	if (!SpawnedSkillBall)
 	{
 		if (bStartedSkillAction)
@@ -148,6 +150,7 @@ void AGsPlayer::PerformMeleeHit()
 
 	World->GetTimerManager().ClearTimer(MeleeHitTimer);
 
+	const float MeleeDamage = GetPlayerTuning().MeleeDamage;
 	if (MeleeDamage <= 0.0f)
 	{
 		return;
@@ -182,6 +185,6 @@ void AGsPlayer::PerformMeleeHit()
 		}
 
 		DamagedActors.Add(HitActor);
-		UGameplayStatics::ApplyDamage(HitActor, MeleeDamage, GetController(), this, MeleeDamageType);
+		UGameplayStatics::ApplyDamage(HitActor, MeleeDamage, GetController(), this, UDamageType::StaticClass());
 	}
 }

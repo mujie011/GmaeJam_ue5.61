@@ -3,11 +3,40 @@
 #include "Player/Character/GsPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
 #include "UEGameJam.h"
+
+namespace
+{
+	const FName WallRunSurfaceTag(TEXT("WallRunSurface"));
+
+	bool TryGetWallRunSurfaceNormal(const FHitResult& Hit, FVector& OutWallNormal)
+	{
+		const AActor* HitActor = Hit.GetActor();
+		const UPrimitiveComponent* HitComponent = Hit.GetComponent();
+		const bool bHasWallRunSurfaceTag =
+			(HitActor && HitActor->ActorHasTag(WallRunSurfaceTag))
+			|| (HitComponent && HitComponent->ComponentHasTag(WallRunSurfaceTag));
+		if (!bHasWallRunSurfaceTag)
+		{
+			return false;
+		}
+
+		FVector WallNormal = Hit.ImpactNormal.IsNearlyZero() ? Hit.Normal : Hit.ImpactNormal;
+		WallNormal = FVector::VectorPlaneProject(WallNormal, FVector::UpVector);
+		if (!WallNormal.Normalize())
+		{
+			return false;
+		}
+
+		OutWallNormal = WallNormal;
+		return true;
+	}
+}
 
 void AGsPlayer::StartWallRunDetectionDelay()
 {
@@ -22,6 +51,7 @@ void AGsPlayer::StartWallRunDetectionDelay()
 
 	World->GetTimerManager().ClearTimer(WallRunDetectionDelayTimer);
 
+	const float WallRunCheckDelay = GetPlayerTuning().WallRunCheckDelay;
 	if (WallRunCheckDelay <= KINDA_SMALL_NUMBER)
 	{
 		EnableWallRunDetection();
@@ -100,7 +130,7 @@ bool AGsPlayer::TryFindWallRunSurface(FHitResult& OutWallHit, FVector& OutWallNo
 
 	const UCapsuleComponent* PlayerCapsuleComponent = GetCapsuleComponent();
 	UWorld* World = GetWorld();
-	if (!PlayerCapsuleComponent || !World || WallRunSideTraceDistance <= 0.0f)
+	if (!PlayerCapsuleComponent || !World || GetPlayerTuning().WallRunSideTraceDistance <= 0.0f)
 	{
 		return false;
 	}
@@ -123,25 +153,27 @@ bool AGsPlayer::TryFindWallRunSurface(FHitResult& OutWallHit, FVector& OutWallNo
 
 	const auto TryTraceSide = [&](const FVector& TraceDirection)
 	{
-		FHitResult SideHit;
-		const FVector TraceEnd = TraceStart + (TraceDirection * WallRunSideTraceDistance);
-		if (!World->LineTraceSingleByObjectType(SideHit, TraceStart, TraceEnd, ObjectQueryParams, QueryParams))
+		TArray<FHitResult> SideHits;
+		const FVector TraceEnd = TraceStart + (TraceDirection * GetPlayerTuning().WallRunSideTraceDistance);
+		if (!World->LineTraceMultiByObjectType(SideHits, TraceStart, TraceEnd, ObjectQueryParams, QueryParams))
 		{
 			return;
 		}
 
-		FVector WallNormal = SideHit.ImpactNormal.IsNearlyZero() ? SideHit.Normal : SideHit.ImpactNormal;
-		WallNormal = FVector::VectorPlaneProject(WallNormal, FVector::UpVector);
-		if (!WallNormal.Normalize())
+		for (const FHitResult& SideHit : SideHits)
 		{
-			return;
-		}
+			FVector WallNormal = FVector::ZeroVector;
+			if (!TryGetWallRunSurfaceNormal(SideHit, WallNormal))
+			{
+				continue;
+			}
 
-		if (SideHit.Distance < BestDistance)
-		{
-			BestHit = SideHit;
-			BestNormal = WallNormal;
-			BestDistance = SideHit.Distance;
+			if (SideHit.Distance < BestDistance)
+			{
+				BestHit = SideHit;
+				BestNormal = WallNormal;
+				BestDistance = SideHit.Distance;
+			}
 		}
 	};
 
@@ -165,7 +197,7 @@ bool AGsPlayer::TryFindWallRunSurfaceAlongNormal(const FVector& ExpectedWallNorm
 
 	const UCapsuleComponent* PlayerCapsuleComponent = GetCapsuleComponent();
 	UWorld* World = GetWorld();
-	if (!PlayerCapsuleComponent || !World || WallRunSideTraceDistance <= 0.0f)
+	if (!PlayerCapsuleComponent || !World || GetPlayerTuning().WallRunSideTraceDistance <= 0.0f)
 	{
 		return false;
 	}
@@ -182,22 +214,31 @@ bool AGsPlayer::TryFindWallRunSurfaceAlongNormal(const FVector& ExpectedWallNorm
 	ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldDynamic);
 
 	const FVector TraceStart = GetActorLocation();
-	const FVector TraceEnd = TraceStart + (TraceDirection * WallRunSideTraceDistance);
-	if (!World->LineTraceSingleByObjectType(OutWallHit, TraceStart, TraceEnd, ObjectQueryParams, QueryParams))
+	const FVector TraceEnd = TraceStart + (TraceDirection * GetPlayerTuning().WallRunSideTraceDistance);
+	TArray<FHitResult> WallHits;
+	if (!World->LineTraceMultiByObjectType(WallHits, TraceStart, TraceEnd, ObjectQueryParams, QueryParams))
 	{
 		return false;
 	}
 
-	FVector WallNormal = OutWallHit.ImpactNormal.IsNearlyZero() ? OutWallHit.Normal : OutWallHit.ImpactNormal;
-	WallNormal = FVector::VectorPlaneProject(WallNormal, FVector::UpVector);
-	if (!WallNormal.Normalize())
+	float BestDistance = TNumericLimits<float>::Max();
+	for (const FHitResult& WallHit : WallHits)
 	{
-		OutWallHit = FHitResult();
-		return false;
+		FVector WallNormal = FVector::ZeroVector;
+		if (!TryGetWallRunSurfaceNormal(WallHit, WallNormal))
+		{
+			continue;
+		}
+
+		if (WallHit.Distance < BestDistance)
+		{
+			OutWallHit = WallHit;
+			OutWallNormal = WallNormal;
+			BestDistance = WallHit.Distance;
+		}
 	}
 
-	OutWallNormal = WallNormal;
-	return true;
+	return BestDistance != TNumericLimits<float>::Max();
 }
 
 bool AGsPlayer::CanTriggerWallRun(const FVector& WallNormal) const
@@ -214,8 +255,9 @@ bool AGsPlayer::CanTriggerWallRun(const FVector& WallNormal) const
 		return false;
 	}
 
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
 	const float CameraWallDot = FMath::Abs(FVector::DotProduct(CameraForward, HorizontalWallNormal));
-	if (CameraWallDot > WallRunMaxCameraWallNormalDot)
+	if (CameraWallDot > PlayerTuning.WallRunMaxCameraWallNormalDot)
 	{
 		return false;
 	}
@@ -228,13 +270,14 @@ bool AGsPlayer::CanTriggerWallRun(const FVector& WallNormal) const
 	}
 
 	const float ForwardCameraDot = FVector::DotProduct(HorizontalVelocity, CameraForward);
-	return ForwardCameraDot >= WallRunMinForwardCameraDot;
+	return ForwardCameraDot >= PlayerTuning.WallRunMinForwardCameraDot;
 }
 
 bool AGsPlayer::StartWallRun(const FVector& WallNormal)
 {
 	UCharacterMovementComponent* PlayerMovementComponent = GetCharacterMovement();
-	if (bIsDead || !PlayerMovementComponent || WallRunSpeed <= 0.0f || !PlayerMovementComponent->IsFalling())
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
+	if (bIsDead || !PlayerMovementComponent || PlayerTuning.WallRunSpeed <= 0.0f || !PlayerMovementComponent->IsFalling())
 	{
 		return false;
 	}
@@ -271,12 +314,12 @@ bool AGsPlayer::StartWallRun(const FVector& WallNormal)
 	WallRunSurfaceNormal = HorizontalWallNormal;
 	bHasTriggeredWallRunThisJump = true;
 	bCanCheckWallRun = false;
-	SetWallRunCameraTiltTarget(bIsRightWall ? -WallRunCameraTiltAngle : WallRunCameraTiltAngle);
+	SetWallRunCameraTiltTarget(bIsRightWall ? -PlayerTuning.WallRunCameraTiltAngle : PlayerTuning.WallRunCameraTiltAngle);
 
 	PlayerMovementComponent->GravityScale = 0.0f;
 	PlayerMovementComponent->AirControl = 0.0f;
 	PlayerMovementComponent->SetMovementMode(MOVE_Falling);
-	PlayerMovementComponent->Velocity = WallRunDirection * WallRunSpeed;
+	PlayerMovementComponent->Velocity = WallRunDirection * PlayerTuning.WallRunSpeed;
 
 	return true;
 }
@@ -322,7 +365,7 @@ void AGsPlayer::UpdateWallRun(float DeltaSeconds)
 	PlayerMovementComponent->GravityScale = 0.0f;
 	PlayerMovementComponent->AirControl = 0.0f;
 	PlayerMovementComponent->SetMovementMode(MOVE_Falling);
-	PlayerMovementComponent->Velocity = WallRunDirection * WallRunSpeed;
+	PlayerMovementComponent->Velocity = WallRunDirection * GetPlayerTuning().WallRunSpeed;
 	PlayerMovementComponent->Velocity.Z = 0.0f;
 }
 
@@ -360,9 +403,10 @@ void AGsPlayer::StopWallRun()
 
 bool AGsPlayer::TryWallRunJump()
 {
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
 	if (!IsWallRunning()
 		|| bIsDead
-		|| (WallRunJumpHorizontalStrength <= 0.0f && WallRunJumpVerticalStrength <= 0.0f))
+		|| (PlayerTuning.WallRunJumpHorizontalStrength <= 0.0f && PlayerTuning.WallRunJumpVerticalStrength <= 0.0f))
 	{
 		return false;
 	}
@@ -385,8 +429,8 @@ bool AGsPlayer::TryWallRunJump()
 	}
 
 	const FVector LaunchVelocity =
-		(HorizontalJumpDirection * WallRunJumpHorizontalStrength)
-		+ (FVector::UpVector * WallRunJumpVerticalStrength);
+		(HorizontalJumpDirection * PlayerTuning.WallRunJumpHorizontalStrength)
+		+ (FVector::UpVector * PlayerTuning.WallRunJumpVerticalStrength);
 
 	StopWallRun();
 	LaunchCharacter(LaunchVelocity, true, true);
@@ -397,13 +441,15 @@ bool AGsPlayer::TryWallRunJump()
 
 void AGsPlayer::UpdateWallRunCameraTilt(float DeltaSeconds)
 {
-	const float DesiredRoll = FMath::Clamp(TargetWallRunCameraRoll, -WallRunCameraTiltAngle, WallRunCameraTiltAngle);
-	CurrentWallRunCameraRoll = WallRunCameraTiltInterpSpeed > 0.0f
-		? FMath::FInterpTo(CurrentWallRunCameraRoll, DesiredRoll, DeltaSeconds, WallRunCameraTiltInterpSpeed)
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
+	const float DesiredRoll = FMath::Clamp(TargetWallRunCameraRoll, -PlayerTuning.WallRunCameraTiltAngle, PlayerTuning.WallRunCameraTiltAngle);
+	CurrentWallRunCameraRoll = PlayerTuning.WallRunCameraTiltInterpSpeed > 0.0f
+		? FMath::FInterpTo(CurrentWallRunCameraRoll, DesiredRoll, DeltaSeconds, PlayerTuning.WallRunCameraTiltInterpSpeed)
 		: DesiredRoll;
 }
 
 void AGsPlayer::SetWallRunCameraTiltTarget(float InTargetRoll)
 {
+	const float WallRunCameraTiltAngle = GetPlayerTuning().WallRunCameraTiltAngle;
 	TargetWallRunCameraRoll = FMath::Clamp(InTargetRoll, -WallRunCameraTiltAngle, WallRunCameraTiltAngle);
 }

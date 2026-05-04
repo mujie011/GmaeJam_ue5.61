@@ -107,11 +107,12 @@ bool AGsPlayer::StartSlide()
 		return false;
 	}
 
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
 	OriginalSlideCapsuleHalfHeight = PlayerCapsuleComponent->GetUnscaledCapsuleHalfHeight();
 	OriginalSlideMaxWalkSpeed = PlayerMovementComponent->MaxWalkSpeed;
 
 	const float TargetCapsuleHalfHeight = FMath::Clamp(
-		SlideCapsuleHalfHeight,
+		PlayerTuning.SlideCapsuleHalfHeight,
 		PlayerCapsuleComponent->GetUnscaledCapsuleRadius(),
 		OriginalSlideCapsuleHalfHeight);
 	const float HalfHeightDelta = OriginalSlideCapsuleHalfHeight - TargetCapsuleHalfHeight;
@@ -120,8 +121,8 @@ bool AGsPlayer::StartSlide()
 	PlayerCapsuleComponent->SetCapsuleHalfHeight(TargetCapsuleHalfHeight, true);
 	AddActorWorldOffset(FVector(0.0f, 0.0f, -WorldHalfHeightDelta), false);
 
-	PlayerMovementComponent->MaxWalkSpeed = FMath::Max(SlideSpeed, SlideMaxSpeed);
-	CurrentSlideSpeed = SlideSpeed;
+	PlayerMovementComponent->MaxWalkSpeed = FMath::Max(PlayerTuning.SlideSpeed, PlayerTuning.SlideMaxSpeed);
+	CurrentSlideSpeed = PlayerTuning.SlideSpeed;
 	bIsWaitingToStopSlideWhenCanStand = false;
 
 	FVector NewVelocity = SlideDirection * CurrentSlideSpeed;
@@ -146,7 +147,8 @@ bool AGsPlayer::StartDash()
 
 	UWorld* World = GetWorld();
 	const float CurrentWorldTime = World ? World->GetTimeSeconds() : 0.0f;
-	if ((CurrentWorldTime - LastDashTime) < DashCooldown)
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
+	if ((CurrentWorldTime - LastDashTime) < PlayerTuning.DashCooldown)
 	{
 		return false;
 	}
@@ -174,7 +176,7 @@ bool AGsPlayer::StartDash()
 	PreDashMovementMode = PlayerMovementComponent->MovementMode;
 	PreDashCustomMovementMode = PlayerMovementComponent->CustomMovementMode;
 	DashStartLocation = GetActorLocation();
-	DashTargetLocation = DashStartLocation + (DashDirection * (DashSpeed * DashDuration));
+	DashTargetLocation = DashStartLocation + (DashDirection * (PlayerTuning.DashSpeed * PlayerTuning.DashDuration));
 	DashTargetLocation.Z = DashStartLocation.Z;
 	CurrentDashElapsedTime = 0.0f;
 
@@ -187,7 +189,7 @@ bool AGsPlayer::StartDash()
 	PlayerMovementComponent->StopActiveMovement();
 	PlayerMovementComponent->DisableMovement();
 
-	if (DashDuration <= KINDA_SMALL_NUMBER)
+	if (PlayerTuning.DashDuration <= KINDA_SMALL_NUMBER)
 	{
 		FinishDash();
 	}
@@ -328,6 +330,7 @@ void AGsPlayer::UpdateSlide(float DeltaSeconds)
 		return;
 	}
 
+	const FGsPlayerTuningRow& PlayerTuning = GetPlayerTuning();
 	UCharacterMovementComponent* PlayerMovementComponent = GetCharacterMovement();
 	if (!PlayerMovementComponent)
 	{
@@ -375,23 +378,23 @@ void AGsPlayer::UpdateSlide(float DeltaSeconds)
 
 		if (DownhillAlignment > KINDA_SMALL_NUMBER && bIsSlideInputHeld)
 		{
-			if (SlideSlopeAcceleration > 0.0f)
+			if (PlayerTuning.SlideSlopeAcceleration > 0.0f)
 			{
-				CurrentSlideSpeed = FMath::Min(SlideMaxSpeed, CurrentSlideSpeed + (SlideSlopeAcceleration * DownhillAlignment * DeltaSeconds));
+				CurrentSlideSpeed = FMath::Min(PlayerTuning.SlideMaxSpeed, CurrentSlideSpeed + (PlayerTuning.SlideSlopeAcceleration * DownhillAlignment * DeltaSeconds));
 			}
 			bShouldTryStopForLowSpeed = false;
 		}
 		else
 		{
-			CurrentSlideSpeed = FMath::Max(0.0f, CurrentSlideSpeed - (SlideDeceleration * DeltaSeconds));
+			CurrentSlideSpeed = FMath::Max(0.0f, CurrentSlideSpeed - (PlayerTuning.SlideDeceleration * DeltaSeconds));
 		}
 	}
 	else
 	{
-		CurrentSlideSpeed = FMath::Max(0.0f, CurrentSlideSpeed - (SlideDeceleration * DeltaSeconds));
+		CurrentSlideSpeed = FMath::Max(0.0f, CurrentSlideSpeed - (PlayerTuning.SlideDeceleration * DeltaSeconds));
 	}
 
-	if (bShouldTryStopForLowSpeed && CurrentSlideSpeed < SlideStopSpeed)
+	if (bShouldTryStopForLowSpeed && CurrentSlideSpeed < PlayerTuning.SlideStopSpeed)
 	{
 		if (StopSlide(false))
 		{
@@ -419,6 +422,7 @@ void AGsPlayer::UpdateDash(float DeltaSeconds)
 	}
 
 	CurrentDashElapsedTime += DeltaSeconds;
+	const float DashDuration = GetPlayerTuning().DashDuration;
 	const float DashAlpha = DashDuration > KINDA_SMALL_NUMBER
 		? FMath::Clamp(CurrentDashElapsedTime / DashDuration, 0.0f, 1.0f)
 		: 1.0f;
